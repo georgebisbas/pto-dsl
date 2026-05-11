@@ -64,20 +64,28 @@ def _has_func_return(block):
     return last_name == "func.return"
 
 
+def _get_globals(fn):
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    return fn.__globals__
+
+
 def _inject_globals(fn, values):
+    globs = _get_globals(fn)
     old = {}
     for name, value in values.items():
-        old[name] = fn.__globals__.get(name, None)
-        fn.__globals__[name] = value
+        old[name] = globs.get(name, None)
+        globs[name] = value
     return old
 
 
 def _restore_globals(fn, old, names):
+    globs = _get_globals(fn)
     for name in names:
-        if old[name] is None and name in fn.__globals__:
-            del fn.__globals__[name]
+        if old[name] is None and name in globs:
+            del globs[name]
         else:
-            fn.__globals__[name] = old[name]
+            globs[name] = old[name]
 
 
 def _define(module, ctx, meta_map, fn, *, name=None, entry=False, kernel=None):
@@ -111,6 +119,13 @@ def _define(module, ctx, meta_map, fn, *, name=None, entry=False, kernel=None):
         if not ret_types and not _has_func_return(block):
             func.ReturnOp([])
 
+    # When building a multi-function module, record the entry function's
+    # metadata so that JitWrapper can discover the signature for caller.cpp.
+    if entry and _CURRENT is not None:
+        _CURRENT["entry_name"] = fn_name
+        _CURRENT["entry_sig"] = sig
+        _CURRENT["entry_arg_types"] = arg_types
+
     return FuncRef(fn_name)
 
 
@@ -138,9 +153,21 @@ def ir_func(fn=None, *, name=None, kernel=None):
     return decorator
 
 
+# Stores entry function metadata from the last to_ir_module(module=True) call.
+# Read by JitWrapper._build immediately after calling to_ir_module (synchronous).
+_LAST_ENTRY_META = None
+
+
+def get_last_entry_meta():
+    """Return the entry function metadata from the last module build, or None."""
+    return _LAST_ENTRY_META
+
+
 def to_ir_module(*, meta_data, module=False):
     def decorator(fn):
-        global _CURRENT
+        global _CURRENT, _LAST_ENTRY_META
+        _LAST_ENTRY_META = None
+
         with Context() as ctx, get_user_code_loc():
             _pto.register_dialect(ctx, load=True)
             meta_map = _resolve_meta(meta_data)
@@ -156,6 +183,12 @@ def to_ir_module(*, meta_data, module=False):
                 _CURRENT = {"ctx": ctx, "module": ir_module, "meta_map": meta_map}
                 try:
                     fn()
+                    # Capture entry metadata before _CURRENT is restored.
+                    _LAST_ENTRY_META = {
+                        "entry_name": _CURRENT.get("entry_name"),
+                        "entry_sig": _CURRENT.get("entry_sig"),
+                        "entry_arg_types": _CURRENT.get("entry_arg_types"),
+                    }
                 finally:
                     _CURRENT = prev
                     _restore_globals(fn, old, meta_map.keys())
@@ -168,4 +201,4 @@ def to_ir_module(*, meta_data, module=False):
     return decorator
 
 
-__all__ = ["FuncRef", "ir_func", "to_ir_module"]
+__all__ = ["FuncRef", "get_last_entry_meta", "ir_func", "to_ir_module"]

@@ -9,6 +9,8 @@ from .pto_general import (
     as_tensor,
     call,
     set_ffts,
+    sync_set,
+    sync_wait,
     cube_section,
     declare_global,
     declare_tile,
