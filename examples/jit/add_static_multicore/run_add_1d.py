@@ -16,7 +16,6 @@ def meta_data():
     ptr_type = pto.PtrType(dtype)
     tensor_type = pto.TensorType(rank=2, dtype=dtype)
 
-    subtensor_type = pto.SubTensorType(shape=[1, 1024], dtype=dtype)
     tile_type = pto.TileBufType(
         shape=[1, 1024],
         valid_shape=[-1, -1],
@@ -46,21 +45,15 @@ def vec_add_kernel(arg0: "ptr_type", arg1: "ptr_type", arg2: "ptr_type") -> None
     cidmul = cid * sub_bnum
     vid = cidmul + sub_bid
 
-    tv0 = pto.as_tensor(tensor_type, ptr=arg0, shape=[c1, c1024], strides=[c1024, c1])
-    tv1 = pto.as_tensor(tensor_type, ptr=arg1, shape=[c1, c1024], strides=[c1024, c1])
-    tv2 = pto.as_tensor(tensor_type, ptr=arg2, shape=[c1, c1024], strides=[c1024, c1])
+    tv0 = pto.as_tensor(ptr=arg0, shape=[c1, c1024], strides=[c1024, c1])
+    tv1 = pto.as_tensor(ptr=arg1, shape=[c1, c1024], strides=[c1024, c1])
+    tv2 = pto.as_tensor(ptr=arg2, shape=[c1, c1024], strides=[c1024, c1])
 
     vid_idx = s.index_cast(vid)
     offset = vid_idx * c1024  # every core loads 1024 elements of data
-    sv0 = pto.slice_view(
-        subtensor_type, source=tv0, offsets=[c0, offset], sizes=[c1, c1024]
-    )
-    sv1 = pto.slice_view(
-        subtensor_type, source=tv1, offsets=[c0, offset], sizes=[c1, c1024]
-    )
-    sv2 = pto.slice_view(
-        subtensor_type, source=tv2, offsets=[c0, offset], sizes=[c1, c1024]
-    )
+    sv0 = pto.slice_view(source=tv0, offsets=[c0, offset], sizes=[c1, c1024])
+    sv1 = pto.slice_view(source=tv1, offsets=[c0, offset], sizes=[c1, c1024])
+    sv2 = pto.slice_view(source=tv2, offsets=[c0, offset], sizes=[c1, c1024])
 
     with pto.vector_section():
         tb0 = pto.alloc_tile(tile_type, valid_row=c1, valid_col=c1024)

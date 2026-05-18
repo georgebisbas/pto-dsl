@@ -7,7 +7,8 @@ _TILE_ROWS = 32
 _TILE_COLS = 32
 
 
-def meta_data_expand(dtype="fp32"):
+def build_col_expand(dtype="fp32"):
+    """Column-wise broadcast: X[i, j] = y[j]"""
     pto_dtype = {"fp16": pto.float16, "fp32": pto.float32}[dtype]
     ptr_type = pto.PtrType(pto_dtype)
     index_dtype = pto.int32
@@ -16,11 +17,6 @@ def meta_data_expand(dtype="fp32"):
     tile_cols = _TILE_COLS
 
     tensor2d_type = pto.TensorType(rank=2, dtype=pto_dtype)
-
-    subtensor_col_src = pto.SubTensorType(shape=[1, tile_cols], dtype=pto_dtype)
-    subtensor_row_src = pto.SubTensorType(shape=[tile_rows, 1], dtype=pto_dtype)
-    subtensor_scalar = pto.SubTensorType(shape=[1, 1], dtype=pto_dtype)
-    subtensor_dst = pto.SubTensorType(shape=[tile_rows, tile_cols], dtype=pto_dtype)
 
     tile_cfg = pto.TileBufConfig()
     tile_type = pto.TileBufType(
@@ -31,40 +27,12 @@ def meta_data_expand(dtype="fp32"):
         config=tile_cfg,
     )
 
-    x_col_tile_cfg = pto.TileBufConfig(blayout="ColMajor")
-    x_col_tile_type = pto.TileBufType(
-        shape=[tile_rows, 1],
-        valid_shape=[-1, 1],
-        dtype=pto_dtype,
-        memory_space="VEC",
-        config=x_col_tile_cfg,
-    )
-    return {
-        "ptr_type": ptr_type,
-        "pto_dtype": pto_dtype,
-        "index_dtype": index_dtype,
-        "tensor2d_type": tensor2d_type,
-        "subtensor_col_src": subtensor_col_src,
-        "subtensor_row_src": subtensor_row_src,
-        "subtensor_scalar": subtensor_scalar,
-        "subtensor_dst": subtensor_dst,
-        "tile_type": tile_type,
-        "x_col_tile_type": x_col_tile_type,
-        "tile_rows": tile_rows,
-        "tile_cols": tile_cols,
-    }
-
-
-def build_col_expand(dtype="fp32"):
-    """Column-wise broadcast: X[i, j] = y[j]"""
-    _meta_data = lambda: meta_data_expand(dtype=dtype)
-
-    @to_ir_module(meta_data=_meta_data)
+    @to_ir_module
     def _kernel(
-        src_ptr: "ptr_type",
-        dst_ptr: "ptr_type",
-        batch_i32: "index_dtype",
-        n_cols_i32: "index_dtype",
+        src_ptr: ptr_type,
+        dst_ptr: ptr_type,
+        batch_i32: index_dtype,
+        n_cols_i32: index_dtype,
     ) -> None:
         c0 = const(0)
         c1 = const(1)
@@ -86,13 +54,11 @@ def build_col_expand(dtype="fp32"):
             col_end = s.min_u(col_start + cols_per_core, n_cols)
 
             tv_src = pto.as_tensor(
-                tensor2d_type,
                 ptr=src_ptr,
                 shape=[c1, n_cols],
                 strides=[n_cols, c1],
             )
             tv_dst = pto.as_tensor(
-                tensor2d_type,
                 ptr=dst_ptr,
                 shape=[batch, n_cols],
                 strides=[n_cols, c1],
@@ -103,7 +69,6 @@ def build_col_expand(dtype="fp32"):
 
                 tb_src = pto.alloc_tile(tile_type, valid_row=c1, valid_col=cols_this)
                 sv_src = pto.slice_view(
-                    subtensor_col_src,
                     source=tv_src,
                     offsets=[c0, col],
                     sizes=[c1, cols_this],
@@ -119,7 +84,6 @@ def build_col_expand(dtype="fp32"):
                     tile.col_expand(tb_src, tb_dst)
 
                     sv_dst = pto.slice_view(
-                        subtensor_dst,
                         source=tv_dst,
                         offsets=[row, col],
                         sizes=[rows_this, cols_this],
@@ -131,14 +95,30 @@ def build_col_expand(dtype="fp32"):
 
 def build_row_expand(dtype="fp32"):
     """Row-wise broadcast: Y[i, j] = x[i]"""
-    _meta_data = lambda: meta_data_expand(dtype=dtype)
+    pto_dtype = {"fp16": pto.float16, "fp32": pto.float32}[dtype]
+    ptr_type = pto.PtrType(pto_dtype)
+    index_dtype = pto.int32
 
-    @to_ir_module(meta_data=_meta_data)
+    tile_rows = _TILE_ROWS
+    tile_cols = _TILE_COLS
+
+    tensor2d_type = pto.TensorType(rank=2, dtype=pto_dtype)
+
+    tile_cfg = pto.TileBufConfig()
+    tile_type = pto.TileBufType(
+        shape=[tile_rows, tile_cols],
+        valid_shape=[-1, -1],
+        dtype=pto_dtype,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+
+    @to_ir_module
     def _kernel(
-        x_ptr: "ptr_type",
-        y_ptr: "ptr_type",
-        batch_i32: "index_dtype",
-        n_cols_i32: "index_dtype",
+        x_ptr: ptr_type,
+        y_ptr: ptr_type,
+        batch_i32: index_dtype,
+        n_cols_i32: index_dtype,
     ) -> None:
         c0 = const(0)
         c1 = const(1)
@@ -160,13 +140,11 @@ def build_row_expand(dtype="fp32"):
             row_end = s.min_u(row_start + rows_per_core, batch)
 
             tv_x = pto.as_tensor(
-                tensor2d_type,
                 ptr=x_ptr,
                 shape=[batch, c1],
                 strides=[c1, c1],
             )
             tv_y = pto.as_tensor(
-                tensor2d_type,
                 ptr=y_ptr,
                 shape=[batch, n_cols],
                 strides=[n_cols, c1],
@@ -177,7 +155,6 @@ def build_row_expand(dtype="fp32"):
 
                 tb_src = pto.alloc_tile(tile_type, valid_row=rows_this, valid_col=c1)
                 sv_x = pto.slice_view(
-                    subtensor_row_src,
                     source=tv_x,
                     offsets=[row, c0],
                     sizes=[rows_this, c1],
@@ -193,7 +170,6 @@ def build_row_expand(dtype="fp32"):
                     tile.row_expand(tb_src, tb_dst)
 
                     sv_y = pto.slice_view(
-                        subtensor_dst,
                         source=tv_y,
                         offsets=[row, col],
                         sizes=[rows_this, cols_this],
@@ -217,15 +193,32 @@ _COL_EXPAND_FUSED_OPS = {
 def _build_col_expand_fused(kind, dtype="fp32"):
     """Fused col-expand: Z[i,j] = Y[i,j] op x[j]"""
     col_op = _COL_EXPAND_FUSED_OPS[kind]
-    _meta_data = lambda: meta_data_expand(dtype=dtype)
 
-    @to_ir_module(meta_data=_meta_data)
+    pto_dtype = {"fp16": pto.float16, "fp32": pto.float32}[dtype]
+    ptr_type = pto.PtrType(pto_dtype)
+    index_dtype = pto.int32
+
+    tile_rows = _TILE_ROWS
+    tile_cols = _TILE_COLS
+
+    tensor2d_type = pto.TensorType(rank=2, dtype=pto_dtype)
+
+    tile_cfg = pto.TileBufConfig()
+    tile_type = pto.TileBufType(
+        shape=[tile_rows, tile_cols],
+        valid_shape=[-1, -1],
+        dtype=pto_dtype,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+
+    @to_ir_module
     def _kernel(
-        x_ptr: "ptr_type",
-        y_ptr: "ptr_type",
-        z_ptr: "ptr_type",
-        batch_i32: "index_dtype",
-        n_cols_i32: "index_dtype",
+        x_ptr: ptr_type,
+        y_ptr: ptr_type,
+        z_ptr: ptr_type,
+        batch_i32: index_dtype,
+        n_cols_i32: index_dtype,
     ) -> None:
         c0 = const(0)
         c1 = const(1)
@@ -247,19 +240,16 @@ def _build_col_expand_fused(kind, dtype="fp32"):
             col_end = s.min_u(col_start + cols_per_core, n_cols)
 
             tv_x = pto.as_tensor(
-                tensor2d_type,
                 ptr=x_ptr,
                 shape=[c1, n_cols],
                 strides=[n_cols, c1],
             )
             tv_y = pto.as_tensor(
-                tensor2d_type,
                 ptr=y_ptr,
                 shape=[batch, n_cols],
                 strides=[n_cols, c1],
             )
             tv_z = pto.as_tensor(
-                tensor2d_type,
                 ptr=z_ptr,
                 shape=[batch, n_cols],
                 strides=[n_cols, c1],
@@ -270,7 +260,6 @@ def _build_col_expand_fused(kind, dtype="fp32"):
 
                 tb_src1 = pto.alloc_tile(tile_type, valid_row=c1, valid_col=cols_this)
                 sv_x = pto.slice_view(
-                    subtensor_col_src,
                     source=tv_x,
                     offsets=[c0, col],
                     sizes=[c1, cols_this],
@@ -281,13 +270,11 @@ def _build_col_expand_fused(kind, dtype="fp32"):
                     rows_this = s.min_u(c_tile_rows, batch - row)
 
                     sv_y = pto.slice_view(
-                        subtensor_dst,
                         source=tv_y,
                         offsets=[row, col],
                         sizes=[rows_this, cols_this],
                     )
                     sv_z = pto.slice_view(
-                        subtensor_dst,
                         source=tv_z,
                         offsets=[row, col],
                         sizes=[rows_this, cols_this],
@@ -350,15 +337,41 @@ _ROW_EXPAND_FUSED_OPS = {
 def _build_row_expand_fused(kind, dtype="fp32"):
     """Fused row-expand: Z[i,j] = Y[i,j] op x[i]."""
     row_op = _ROW_EXPAND_FUSED_OPS[kind]
-    _meta_data = lambda: meta_data_expand(dtype=dtype)
 
-    @to_ir_module(meta_data=_meta_data)
+    pto_dtype = {"fp16": pto.float16, "fp32": pto.float32}[dtype]
+    ptr_type = pto.PtrType(pto_dtype)
+    index_dtype = pto.int32
+
+    tile_rows = _TILE_ROWS
+    tile_cols = _TILE_COLS
+
+    tensor2d_type = pto.TensorType(rank=2, dtype=pto_dtype)
+
+    tile_cfg = pto.TileBufConfig()
+    tile_type = pto.TileBufType(
+        shape=[tile_rows, tile_cols],
+        valid_shape=[-1, -1],
+        dtype=pto_dtype,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+
+    x_col_tile_cfg = pto.TileBufConfig(blayout="ColMajor")
+    x_col_tile_type = pto.TileBufType(
+        shape=[tile_rows, 1],
+        valid_shape=[-1, 1],
+        dtype=pto_dtype,
+        memory_space="VEC",
+        config=x_col_tile_cfg,
+    )
+
+    @to_ir_module
     def _kernel(
-        x_ptr: "ptr_type",
-        y_ptr: "ptr_type",
-        z_ptr: "ptr_type",
-        batch_i32: "index_dtype",
-        n_cols_i32: "index_dtype",
+        x_ptr: ptr_type,
+        y_ptr: ptr_type,
+        z_ptr: ptr_type,
+        batch_i32: index_dtype,
+        n_cols_i32: index_dtype,
     ) -> None:
         c0 = const(0)
         c1 = const(1)
@@ -380,20 +393,17 @@ def _build_row_expand_fused(kind, dtype="fp32"):
             row_end = s.min_u(row_start + rows_per_core, batch)
 
             tv_x = pto.as_tensor(
-                tensor2d_type,
                 ptr=x_ptr,
                 shape=[batch, c1],
                 strides=[c1, c1],
                 layout="DN",
             )
             tv_y = pto.as_tensor(
-                tensor2d_type,
                 ptr=y_ptr,
                 shape=[batch, n_cols],
                 strides=[n_cols, c1],
             )
             tv_z = pto.as_tensor(
-                tensor2d_type,
                 ptr=z_ptr,
                 shape=[batch, n_cols],
                 strides=[n_cols, c1],
@@ -406,7 +416,6 @@ def _build_row_expand_fused(kind, dtype="fp32"):
                 # broadcast x[i] across all output columns internally.
                 tb_x = pto.alloc_tile(x_col_tile_type, valid_row=rows_this)
                 sv_x = pto.slice_view(
-                    subtensor_row_src,
                     source=tv_x,
                     offsets=[row, c0],
                     sizes=[rows_this, c1],
@@ -417,13 +426,11 @@ def _build_row_expand_fused(kind, dtype="fp32"):
                     cols_this = s.min_u(c_tile_cols, n_cols - col)
 
                     sv_y = pto.slice_view(
-                        subtensor_dst,
                         source=tv_y,
                         offsets=[row, col],
                         sizes=[rows_this, cols_this],
                     )
                     sv_z = pto.slice_view(
-                        subtensor_dst,
                         source=tv_z,
                         offsets=[row, col],
                         sizes=[rows_this, cols_this],

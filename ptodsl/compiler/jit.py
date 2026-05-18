@@ -9,7 +9,7 @@ from mlir.dialects import pto as _pto
 from mlir.ir import Context, Location
 
 from ..utils.npu_info import get_num_cube_cores
-from .ir import to_ir_module
+from .ir import _materialize_lazy_globals, _resolve_arg_types, to_ir_module
 
 
 def _type_repr(type_obj):
@@ -94,7 +94,6 @@ class JitWrapper:
         self,
         fn,
         *,
-        meta_data,
         output_dir=None,
         block_dim=None,
         enable_insert_sync=True,
@@ -103,9 +102,7 @@ class JitWrapper:
         module=False,
     ):
         self._fn = fn
-        self._orig_sig = inspect.signature(fn)
-        self._sig = self._orig_sig
-        self._meta_data = meta_data
+        self._sig = inspect.signature(fn)
         self._arg_types = None
         self._output_dir = (
             pathlib.Path(output_dir)
@@ -255,37 +252,16 @@ class JitWrapper:
             ) from e
 
     def _resolve_runtime_arg_types(self):
-        from .ir import _resolve_arg_types, _resolve_meta
-
         with Context() as ctx, Location.unknown():
             _pto.register_dialect(ctx, load=True)
-            meta_map = _resolve_meta(self._meta_data)
+            meta_map = _materialize_lazy_globals(self._fn)
             return _resolve_arg_types(self._sig, meta_map)
 
     def _build(self):
         self._output_dir.mkdir(parents=True, exist_ok=True)
         pto_path, cpp_path, caller_path, lib_path = self._artifact_paths()
 
-        if self._module:
-            # Multi-function module mode: build the module and extract
-            # the entry function signature from the module-level metadata.
-            from .ir import get_last_entry_meta
-
-            ir_module = to_ir_module(meta_data=self._meta_data, module=True)(self._fn)
-            entry_meta = get_last_entry_meta()
-            if entry_meta is None or entry_meta.get("entry_name") is None:
-                raise RuntimeError(
-                    "module=True requires at least one `@pto.func` (without "
-                    "kernel=) as the entry point."
-                )
-            self._entry_name = entry_meta["entry_name"]
-            self._sig = entry_meta["entry_sig"]
-            self._arg_types = entry_meta["entry_arg_types"]
-        else:
-            # Single-function mode (original path).
-            self._arg_types = self._resolve_runtime_arg_types()
-            ir_module = to_ir_module(meta_data=self._meta_data)(self._fn)
-
+        ir_module = to_ir_module(self._fn)
         pto_path.write_text(f"{ir_module}\n", encoding="utf-8")
 
         ptoas_cmd = ["ptoas"]
@@ -389,8 +365,8 @@ class JitWrapper:
 
 
 def jit(
+    fn=None,
     *,
-    meta_data,
     output_dir=None,
     block_dim=1,
     enable_insert_sync=True,
@@ -398,10 +374,23 @@ def jit(
     npu_arch="dav-2201",
     module=False,
 ):
+    """Decorator that wraps a kernel function for JIT compilation and NPU execution.
+
+    Usage::
+
+        @jit
+        def my_kernel(arg: ptr_type) -> None:
+            ...
+
+        # or with options:
+        @jit(block_dim=4)
+        def my_kernel(arg: ptr_type) -> None:
+            ...
+    """
+
     def decorator(fn):
         return JitWrapper(
             fn,
-            meta_data=meta_data,
             output_dir=output_dir,
             block_dim=block_dim,
             enable_insert_sync=enable_insert_sync,
@@ -410,6 +399,8 @@ def jit(
             module=module,
         )
 
+    if fn is not None:
+        return decorator(fn)
     return decorator
 
 

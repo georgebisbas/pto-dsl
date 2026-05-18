@@ -6,44 +6,28 @@ const = s.const
 ELEMENTS_PER_TILE = 32 * 1024 // 2  # 32KB UB / sizeof(fp16)
 HALF_ELEMENTS_PER_TILE = ELEMENTS_PER_TILE // 2
 
+dtype = pto.float16
+ptr_type = pto.PtrType(dtype)
+index_dtype = pto.int32
 
-def meta_data():
-    dtype = pto.float16
-    ptr_type = pto.PtrType(dtype)
-    index_dtype = pto.int32
-
-    tensor_type = pto.TensorType(rank=1, dtype=dtype)
-    subtensor_full = pto.SubTensorType(shape=[1, ELEMENTS_PER_TILE], dtype=dtype)
-    subtensor_half = pto.SubTensorType(shape=[1, HALF_ELEMENTS_PER_TILE], dtype=dtype)
-
-    tile_cfg = pto.TileBufConfig()
-    tile_full = pto.TileBufType(
-        shape=[1, ELEMENTS_PER_TILE],
-        valid_shape=[1, -1],
-        dtype=dtype,
-        memory_space="VEC",
-        config=tile_cfg,
-    )
-    tile_half = pto.TileBufType(
-        shape=[1, HALF_ELEMENTS_PER_TILE],
-        valid_shape=[1, -1],
-        dtype=dtype,
-        memory_space="VEC",
-        config=tile_cfg,
-    )
-
-    return {
-        "ptr_type": ptr_type,
-        "index_dtype": index_dtype,
-        "tensor_type": tensor_type,
-        "subtensor_full": subtensor_full,
-        "subtensor_half": subtensor_half,
-        "tile_full": tile_full,
-        "tile_half": tile_half,
-    }
+tile_cfg = pto.TileBufConfig()
+tile_full = pto.TileBufType(
+    shape=[1, ELEMENTS_PER_TILE],
+    valid_shape=[1, -1],
+    dtype=dtype,
+    memory_space="VEC",
+    config=tile_cfg,
+)
+tile_half = pto.TileBufType(
+    shape=[1, HALF_ELEMENTS_PER_TILE],
+    valid_shape=[1, -1],
+    dtype=dtype,
+    memory_space="VEC",
+    config=tile_cfg,
+)
 
 
-@to_ir_module(meta_data=meta_data)
+@to_ir_module
 def fast_hadamard_autosync(
     x_ptr: "ptr_type",
     batch_i32: "index_dtype",
@@ -80,9 +64,7 @@ def fast_hadamard_autosync(
 
             with pto.if_context(samples_to_process > c0):
                 total_elements = batch * n
-                tv_x = pto.as_tensor(
-                    tensor_type, ptr=x_ptr, shape=[total_elements], strides=[c1]
-                )
+                tv_x = pto.as_tensor(ptr=x_ptr, shape=[total_elements], strides=[c1])
 
                 # Two independent tile sets (ping/pong) so event_id 0/1 map to
                 # disjoint UB buffers, matching the manual C++ reference.
@@ -106,7 +88,7 @@ def fast_hadamard_autosync(
                     for s in pto.range(c0, cur_samples, c1):
                         row_offset = gm_offset + s * n
                         sv_row = pto.slice_view(
-                            subtensor_full, source=tv_x, offsets=[row_offset], sizes=[n]
+                            source=tv_x, offsets=[row_offset], sizes=[n]
                         )
                         # Alias row halves inside UB row tile (no GM round-trip
                         # per Hadamard iteration).
@@ -146,7 +128,7 @@ def fast_hadamard_autosync(
                             )
 
 
-@to_ir_module(meta_data=meta_data)
+@to_ir_module
 def fast_hadamard_manualsync(
     x_ptr: "ptr_type",
     batch_i32: "index_dtype",
@@ -183,9 +165,7 @@ def fast_hadamard_manualsync(
 
             with pto.if_context(samples_to_process > c0):
                 total_elements = batch * n
-                tv_x = pto.as_tensor(
-                    tensor_type, ptr=x_ptr, shape=[total_elements], strides=[c1]
-                )
+                tv_x = pto.as_tensor(ptr=x_ptr, shape=[total_elements], strides=[c1])
 
                 # Two independent tile sets (ping/pong) so event_id 0/1 map to
                 # disjoint UB buffers, matching the manual C++ reference.
@@ -211,7 +191,7 @@ def fast_hadamard_manualsync(
                     for s in pto.range(c0, cur_samples, c1):
                         row_offset = gm_offset + s * n
                         sv_row = pto.slice_view(
-                            subtensor_full, source=tv_x, offsets=[row_offset], sizes=[n]
+                            source=tv_x, offsets=[row_offset], sizes=[n]
                         )
                         # Alias row halves inside UB row tile (no GM round-trip
                         # per Hadamard iteration).

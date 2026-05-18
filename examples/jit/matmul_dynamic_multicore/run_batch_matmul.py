@@ -29,11 +29,6 @@ def build_kernel(
 
         tensor_type = pto.TensorType(rank=2, dtype=dtype)
 
-        tile_view_a = pto.SubTensorType(shape=[M, BASEK], dtype=dtype)
-        tile_view_b = pto.SubTensorType(shape=[BASEK, N], dtype=dtype)
-        tile_view_out = pto.SubTensorType(shape=[M, N], dtype=dtype)
-        tile_view_bias = pto.SubTensorType(shape=[1, N], dtype=dtype)
-
         tile_buf_aMat = pto.TileBufType(
             shape=[M, BASEK], dtype=dtype, memory_space="MAT"
         )
@@ -103,18 +98,10 @@ def build_kernel(
             b_end_unclamped = b_start + batches_per_core
             b_end = s.min_u(b_end_unclamped, batch)
 
-            tvA = pto.as_tensor(
-                tensor_type, ptr=a_ptr, shape=[cBM, cK], strides=[cK, c1]
-            )
-            tvB = pto.as_tensor(
-                tensor_type, ptr=b_ptr, shape=[cK, cN], strides=[cN, c1]
-            )
-            tvOut = pto.as_tensor(
-                tensor_type, ptr=out_ptr, shape=[cBM, cN], strides=[cN, c1]
-            )
-            tvBias = pto.as_tensor(
-                tensor_type, ptr=bias_ptr, shape=[c1, cN], strides=[cN, c1]
-            )
+            tvA = pto.as_tensor(ptr=a_ptr, shape=[cBM, cK], strides=[cK, c1])
+            tvB = pto.as_tensor(ptr=b_ptr, shape=[cK, cN], strides=[cN, c1])
+            tvOut = pto.as_tensor(ptr=out_ptr, shape=[cBM, cN], strides=[cN, c1])
+            tvBias = pto.as_tensor(ptr=bias_ptr, shape=[c1, cN], strides=[cN, c1])
 
             aMatTile = pto.alloc_tile(tile_buf_aMat)
             bMatTile = pto.alloc_tile(tile_buf_bMat)
@@ -130,19 +117,16 @@ def build_kernel(
                 for i in pto.range(c0, cIter, c1):
                     kOff = i * cBASEK
                     svA = pto.slice_view(
-                        tile_view_a,
                         source=tvA,
                         offsets=[row_off, kOff],
                         sizes=[cTileM, cBASEK],
                     )
                     svB = pto.slice_view(
-                        tile_view_b,
                         source=tvB,
                         offsets=[kOff, c0],
                         sizes=[cBASEK, cTileN],
                     )
                     svBias = pto.slice_view(
-                        tile_view_bias,
                         source=tvBias,
                         offsets=[c0, c0],
                         sizes=[c1, cTileN],
@@ -181,7 +165,6 @@ def build_kernel(
 
                 pto.record_wait_pair("MATMUL", "STORE_ACC", event_id=0)
                 svOut = pto.slice_view(
-                    tile_view_out,
                     source=tvOut,
                     offsets=[row_off, c0],
                     sizes=[cTileM, cTileN],

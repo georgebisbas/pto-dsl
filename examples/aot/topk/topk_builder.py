@@ -85,81 +85,75 @@ def build_topk(
         "tail merging is not implemented in this example."
     )
 
-    def _meta_data():
-        f32 = pto.float32
-        u32 = pto.uint32
-        tile_cfg = pto.TileBufConfig()
-        return {
-            "ptr_f32": pto.PtrType(f32),
-            "ptr_u32": pto.PtrType(u32),
-            "index_dtype": pto.int32,
-            "tensor_src": pto.TensorType(rank=2, dtype=f32),
-            "tensor_inidx": pto.TensorType(rank=2, dtype=u32),
-            "tensor_scores": pto.TensorType(rank=2, dtype=f32),
-            "tensor_indices": pto.TensorType(rank=2, dtype=u32),
-            "sub_src": pto.SubTensorType(shape=[1, n_cols], dtype=f32),
-            "sub_inidx": pto.SubTensorType(shape=[1, n_cols], dtype=u32),
-            "sub_scores": pto.SubTensorType(shape=[1, topk], dtype=f32),
-            "sub_indices": pto.SubTensorType(shape=[1, topk], dtype=u32),
-            "tile_src": pto.TileBufType(
-                shape=[1, n_cols],
-                valid_shape=[1, n_cols],
-                dtype=f32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            "tile_inidx": pto.TileBufType(
-                shape=[1, n_cols],
-                valid_shape=[1, n_cols],
-                dtype=u32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            "tile_sort_f32": pto.TileBufType(
-                shape=[1, sort_cols],
-                valid_shape=[1, sort_cols],
-                dtype=f32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            "tile_sort_u32": pto.TileBufType(
-                shape=[1, sort_cols],
-                valid_shape=[1, sort_cols],
-                dtype=u32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            # Gather window: same physical shape as tile_sort, but valid_shape
-            # limited to [1, 2*topk] so TGATHER P0101/P1010 produces topk outputs.
-            "tile_gather_win_f32": pto.TileBufType(
-                shape=[1, sort_cols],
-                valid_shape=[1, 2 * topk],
-                dtype=f32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            "tile_gather_win_u32": pto.TileBufType(
-                shape=[1, sort_cols],
-                valid_shape=[1, 2 * topk],
-                dtype=u32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            "tile_topk_f32": pto.TileBufType(
-                shape=[1, topk],
-                valid_shape=[1, topk],
-                dtype=f32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-            "tile_topk_u32": pto.TileBufType(
-                shape=[1, topk],
-                valid_shape=[1, topk],
-                dtype=u32,
-                memory_space="VEC",
-                config=tile_cfg,
-            ),
-        }
+    f32 = pto.float32
+    u32 = pto.uint32
+    tile_cfg = pto.TileBufConfig()
+    ptr_f32 = pto.PtrType(f32)
+    ptr_u32 = pto.PtrType(u32)
+    index_dtype = pto.int32
+    tensor_src = pto.TensorType(rank=2, dtype=f32)
+    tensor_inidx = pto.TensorType(rank=2, dtype=u32)
+    tensor_scores = pto.TensorType(rank=2, dtype=f32)
+    tensor_indices = pto.TensorType(rank=2, dtype=u32)
+
+    tile_src = pto.TileBufType(
+        shape=[1, n_cols],
+        valid_shape=[1, n_cols],
+        dtype=f32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    tile_inidx = pto.TileBufType(
+        shape=[1, n_cols],
+        valid_shape=[1, n_cols],
+        dtype=u32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    tile_sort_f32 = pto.TileBufType(
+        shape=[1, sort_cols],
+        valid_shape=[1, sort_cols],
+        dtype=f32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    tile_sort_u32 = pto.TileBufType(
+        shape=[1, sort_cols],
+        valid_shape=[1, sort_cols],
+        dtype=u32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    # Gather window: same physical shape as tile_sort, but valid_shape
+    # limited to [1, 2*topk] so TGATHER P0101/P1010 produces topk outputs.
+    tile_gather_win_f32 = pto.TileBufType(
+        shape=[1, sort_cols],
+        valid_shape=[1, 2 * topk],
+        dtype=f32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    tile_gather_win_u32 = pto.TileBufType(
+        shape=[1, sort_cols],
+        valid_shape=[1, 2 * topk],
+        dtype=u32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    tile_topk_f32 = pto.TileBufType(
+        shape=[1, topk],
+        valid_shape=[1, topk],
+        dtype=f32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
+    tile_topk_u32 = pto.TileBufType(
+        shape=[1, topk],
+        valid_shape=[1, topk],
+        dtype=u32,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
 
     def _kernel(
         src_ptr: "ptr_f32",  # [n_rows, n_cols]  float32 – input scores
@@ -188,22 +182,19 @@ def build_topk(
             need_clamp = row_end_raw > n_rows_dyn
             rows_this_core = s.select(need_clamp, n_rows_dyn - row_start, rows_per_core)
             tv_src = pto.as_tensor(
-                tensor_src,
                 ptr=src_ptr,
                 shape=[n_rows_dyn, c_ncols],
                 strides=[c_ncols, c1],
             )
             tv_inidx = pto.as_tensor(
-                tensor_inidx, ptr=inidx_ptr, shape=[c1, c_ncols], strides=[c_ncols, c1]
+                ptr=inidx_ptr, shape=[c1, c_ncols], strides=[c_ncols, c1]
             )
             tv_scores = pto.as_tensor(
-                tensor_scores,
                 ptr=scores_ptr,
                 shape=[n_rows_dyn, c_topk],
                 strides=[c_topk, c1],
             )
             tv_indices = pto.as_tensor(
-                tensor_indices,
                 ptr=indices_ptr,
                 shape=[n_rows_dyn, c_topk],
                 strides=[c_topk, c1],
@@ -220,7 +211,7 @@ def build_topk(
 
             # Load shared column-index vector once per core.
             sv_inidx = pto.slice_view(
-                sub_inidx, source=tv_inidx, offsets=[c0, c0], sizes=[c1, c_ncols]
+                source=tv_inidx, offsets=[c0, c0], sizes=[c1, c_ncols]
             )
             pto.load(sv_inidx, tb_inidx)
 
@@ -232,7 +223,6 @@ def build_topk(
 
                         # 1. Load input row.
                         sv_src = pto.slice_view(
-                            sub_src,
                             source=tv_src,
                             offsets=[row, c0],
                             sizes=[c1, c_ncols],
@@ -261,7 +251,6 @@ def build_topk(
 
                         # 7. Store outputs.
                         sv_scores = pto.slice_view(
-                            sub_scores,
                             source=tv_scores,
                             offsets=[row, c0],
                             sizes=[c1, c_topk],
@@ -269,7 +258,6 @@ def build_topk(
                         pto.store(tb_scores, sv_scores)
 
                         sv_indices = pto.slice_view(
-                            sub_indices,
                             source=tv_indices,
                             offsets=[row, c0],
                             sizes=[c1, c_topk],
@@ -277,7 +265,7 @@ def build_topk(
                         pto.store(tb_indices, sv_indices)
 
     _kernel.__name__ = fn_name(n_cols, topk)
-    return to_ir_module(meta_data=_meta_data)(_kernel)
+    return to_ir_module(_kernel)
 
 
 if __name__ == "__main__":

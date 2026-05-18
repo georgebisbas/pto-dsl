@@ -1,9 +1,10 @@
 from contextlib import contextmanager
 
 from mlir.dialects import pto as _pto
-from mlir.ir import FlatSymbolRefAttr, InsertionPoint, Operation
+from mlir.ir import FlatSymbolRefAttr, InsertionPoint, Operation, ShapedType
 
 from .scalar import Value, _unwrap
+from .type_def import _materialize
 from ..utils.codegen import get_user_code_loc, with_loc
 
 
@@ -82,24 +83,47 @@ def add_ptr(ptr, offset):
 
 
 @with_loc
-def as_tensor(tensor_type, *, ptr, shape, strides, layout=None):
+def as_tensor(*, ptr, shape, strides, layout=None):
+    """Create a tensor view over a pointer.
+
+    The result type is inferred: dtype comes from the pointer's element type,
+    rank from ``len(shape)``.  All dimensions are dynamic (``?``).
+    """
+    ptr_val = _unwrap(ptr)
     shape_vals = [_unwrap(v) for v in shape]
     stride_vals = [_unwrap(v) for v in strides]
+    elem_type = _pto.PtrType(ptr_val.type).element_type
+    tensor_type = _pto.TensorViewType.get(len(shape_vals), elem_type)
     kwargs = {}
     layout_attr = _resolve_layout_attr(layout)
     if layout_attr is not None:
         kwargs["layout"] = layout_attr
     return _pto.MakeTensorViewOp(
-        tensor_type, _unwrap(ptr), shape_vals, stride_vals, **kwargs
+        tensor_type, ptr_val, shape_vals, stride_vals, **kwargs
     ).result
 
 
 @with_loc
-def slice_view(subtensor_type, *, source, offsets, sizes):
+def slice_view(*, source, offsets, sizes):
+    """Create a partition (tile) view into *source*.
+
+    The result type is fully inferred: dtype from *source*'s element type,
+    rank from ``len(sizes)``, all dims dynamic (``?``).  ptoas infers the
+    concrete shape from the paired ``alloc_tile`` / ``tile_buf``.
+    """
+    src_val = _unwrap(source)
     offset_vals = [_unwrap(v) for v in offsets]
     size_vals = [_unwrap(v) for v in sizes]
+    src_type = src_val.type
+    if _pto.TensorViewType.isinstance(src_type):
+        elem_type = _pto.TensorViewType(src_type).element_type
+    else:
+        elem_type = _pto.PartitionTensorViewType(src_type).element_type
+    dyn = ShapedType.get_dynamic_size()
+    rank = len(sizes)
+    subtensor_type = _pto.PartitionTensorViewType.get([dyn] * rank, elem_type)
     return _pto.PartitionViewOp(
-        subtensor_type, source, offsets=offset_vals, sizes=size_vals
+        subtensor_type, src_val, offsets=offset_vals, sizes=size_vals
     ).result
 
 
@@ -122,6 +146,7 @@ def cube_section():
 
 @with_loc
 def alloc_tile(tile_type, *, addr=None, valid_row=None, valid_col=None):
+    tile_type = _materialize(tile_type)
     kwargs = {}
     if addr is not None:
         kwargs["addr"] = _unwrap(addr)
@@ -134,6 +159,7 @@ def alloc_tile(tile_type, *, addr=None, valid_row=None, valid_col=None):
 
 @with_loc
 def declare_tile(tile_type):
+    tile_type = _materialize(tile_type)
     return Operation.create("pto.declare_tile", results=[tile_type]).result
 
 

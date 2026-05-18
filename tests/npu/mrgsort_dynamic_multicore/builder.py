@@ -13,35 +13,6 @@ DTYPES = {
 _TYPE_COEF = {"float32": 1, "float16": 2}
 
 
-def meta_data(dtype=None, tile_length=1024):
-    if dtype is None:
-        dtype = "float32"
-    if isinstance(dtype, str):
-        dtype = DTYPES[dtype]()
-
-    index_dtype = pto.int32
-    ptr_type = pto.PtrType(dtype)
-    # 2D tensor view: shape [num_tiles, tile_length], matching the expand_builder pattern.
-    tensor_type = pto.TensorType(rank=2, dtype=dtype)
-    subtensor_type = pto.SubTensorType(shape=[1, tile_length], dtype=dtype)
-    tile_cfg = pto.TileBufConfig()
-    tile_type = pto.TileBufType(
-        shape=[1, tile_length],
-        valid_shape=[1, tile_length],
-        dtype=dtype,
-        memory_space="VEC",
-        config=tile_cfg,
-    )
-    return {
-        "ptr_type": ptr_type,
-        "index_dtype": index_dtype,
-        "tensor_type": tensor_type,
-        "subtensor_type": subtensor_type,
-        "tile_type": tile_type,
-        "tile_length": tile_length,
-    }
-
-
 def build_mrgsort_kernel(
     fn_name="vec_mrgsort_1d_dynamic_float32",
     dtype="float32",
@@ -66,12 +37,28 @@ def build_mrgsort_kernel(
     """
     dtype_str = dtype if isinstance(dtype, str) else "float32"
     hw_block_len = block_len * _TYPE_COEF.get(dtype_str, 1)
-    _meta_data = lambda: meta_data(dtype=dtype, tile_length=tile_length)
+
+    if isinstance(dtype, str):
+        dtype = DTYPES[dtype]()
+
+    index_dtype = pto.int32
+    ptr_type = pto.PtrType(dtype)
+    # 2D tensor view: shape [num_tiles, tile_length], matching the expand_builder pattern.
+    tensor_type = pto.TensorType(rank=2, dtype=dtype)
+
+    tile_cfg = pto.TileBufConfig()
+    tile_type = pto.TileBufType(
+        shape=[1, tile_length],
+        valid_shape=[1, tile_length],
+        dtype=dtype,
+        memory_space="VEC",
+        config=tile_cfg,
+    )
 
     def _kernel(
-        arg0: "ptr_type",  # src: input with sorted sub-lists
-        arg1: "ptr_type",  # out: merged sorted output
-        argN: "index_dtype",  # total number of elements (multiple of tile_length)
+        arg0: ptr_type,  # src: input with sorted sub-lists
+        arg1: ptr_type,  # out: merged sorted output
+        argN: index_dtype,  # total number of elements (multiple of tile_length)
     ) -> None:
         assert tile_length % (hw_block_len * 4) == 0
         assert hw_block_len % 64 == 0
@@ -98,13 +85,11 @@ def build_mrgsort_kernel(
             # 2D tensor views: shape=[num_tiles, tile_length], strides=[tile_length, 1].
             # Mirrors the expand_builder layout where rows are tiles and columns are elements.
             tv0 = pto.as_tensor(
-                tensor_type,
                 ptr=arg0,
                 shape=[num_tiles_global, c_tile],
                 strides=[c_tile, c1],
             )
             tv1 = pto.as_tensor(
-                tensor_type,
                 ptr=arg1,
                 shape=[num_tiles_global, c_tile],
                 strides=[c_tile, c1],
@@ -127,7 +112,6 @@ def build_mrgsort_kernel(
                         tile_idx = i + tile_offset_this_core
 
                         sv0 = pto.slice_view(
-                            subtensor_type,
                             source=tv0,
                             offsets=[tile_idx, c0],
                             sizes=[c1, c_tile],
@@ -145,7 +129,6 @@ def build_mrgsort_kernel(
                         tile.mov(tb_src, tb_dst)
 
                         sv1 = pto.slice_view(
-                            subtensor_type,
                             source=tv1,
                             offsets=[tile_idx, c0],
                             sizes=[c1, c_tile],
@@ -153,7 +136,7 @@ def build_mrgsort_kernel(
                         pto.store(tb_dst, sv1)
 
     _kernel.__name__ = fn_name
-    return to_ir_module(meta_data=_meta_data)(_kernel)
+    return to_ir_module(_kernel)
 
 
 if __name__ == "__main__":

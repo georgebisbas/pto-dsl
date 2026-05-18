@@ -30,41 +30,35 @@ def build_cvt(src_dtype, dst_dtype, rmode=None):
     Semantics:
         dst[i, j] = dst_dtype(src[i, j])
     """
+    src_pto = _pto_type(src_dtype)
+    dst_pto = _pto_type(dst_dtype)
+    ptr_src = pto.PtrType(src_pto)
+    ptr_dst = pto.PtrType(dst_pto)
+    index_dtype = pto.int32
+    tensor_src = pto.TensorType(rank=2, dtype=src_pto)
+    tensor_dst = pto.TensorType(rank=2, dtype=dst_pto)
 
-    def _meta():
-        # PTO types must be resolved here, inside the MLIR context set up by to_ir_module.
-        src_pto = _pto_type(src_dtype)
-        dst_pto = _pto_type(dst_dtype)
-        return {
-            "ptr_src": pto.PtrType(src_pto),
-            "ptr_dst": pto.PtrType(dst_pto),
-            "index_dtype": pto.int32,
-            "tensor_src": pto.TensorType(rank=2, dtype=src_pto),
-            "tensor_dst": pto.TensorType(rank=2, dtype=dst_pto),
-            "sub_src": pto.SubTensorType(shape=[_TILE_ROWS, _TILE_COLS], dtype=src_pto),
-            "sub_dst": pto.SubTensorType(shape=[_TILE_ROWS, _TILE_COLS], dtype=dst_pto),
-            "tile_src": pto.TileBufType(
-                shape=[_TILE_ROWS, _TILE_COLS],
-                valid_shape=[-1, -1],
-                dtype=src_pto,
-                memory_space="VEC",
-                config=pto.TileBufConfig(),
-            ),
-            "tile_dst": pto.TileBufType(
-                shape=[_TILE_ROWS, _TILE_COLS],
-                valid_shape=[-1, -1],
-                dtype=dst_pto,
-                memory_space="VEC",
-                config=pto.TileBufConfig(),
-            ),
-        }
+    tile_src = pto.TileBufType(
+        shape=[_TILE_ROWS, _TILE_COLS],
+        valid_shape=[-1, -1],
+        dtype=src_pto,
+        memory_space="VEC",
+        config=pto.TileBufConfig(),
+    )
+    tile_dst = pto.TileBufType(
+        shape=[_TILE_ROWS, _TILE_COLS],
+        valid_shape=[-1, -1],
+        dtype=dst_pto,
+        memory_space="VEC",
+        config=pto.TileBufConfig(),
+    )
 
-    @to_ir_module(meta_data=_meta)
+    @to_ir_module
     def _kernel(
-        src_ptr: "ptr_src",
-        dst_ptr: "ptr_dst",
-        batch_i32: "index_dtype",
-        n_cols_i32: "index_dtype",
+        src_ptr: ptr_src,
+        dst_ptr: ptr_dst,
+        batch_i32: index_dtype,
+        n_cols_i32: index_dtype,
     ) -> None:
         c0 = const(0)
         c1 = const(1)
@@ -86,10 +80,10 @@ def build_cvt(src_dtype, dst_dtype, rmode=None):
             row_end = s.min_u(row_start + rows_per_core, batch)
 
             tv_src = pto.as_tensor(
-                tensor_src, ptr=src_ptr, shape=[batch, n_cols], strides=[n_cols, c1]
+                ptr=src_ptr, shape=[batch, n_cols], strides=[n_cols, c1]
             )
             tv_dst = pto.as_tensor(
-                tensor_dst, ptr=dst_ptr, shape=[batch, n_cols], strides=[n_cols, c1]
+                ptr=dst_ptr, shape=[batch, n_cols], strides=[n_cols, c1]
             )
 
             for row in pto.range(row_start, row_end, c_tile_rows):
@@ -104,13 +98,11 @@ def build_cvt(src_dtype, dst_dtype, rmode=None):
                     )
 
                     sv_src = pto.slice_view(
-                        sub_src,
                         source=tv_src,
                         offsets=[row, col],
                         sizes=[rows_this, c_tile_cols],
                     )
                     sv_dst = pto.slice_view(
-                        sub_dst,
                         source=tv_dst,
                         offsets=[row, col],
                         sizes=[rows_this, c_tile_cols],

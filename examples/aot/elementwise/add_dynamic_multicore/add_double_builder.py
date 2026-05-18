@@ -3,33 +3,22 @@ from ptodsl import scalar as s
 
 const = s.const
 
+dtype = pto.float32
+index_dtype = pto.int32
+ptr_type = pto.PtrType(dtype)
+tile_length = 8192  # >=16 KB DMA gets high BW util
 
-def meta_data():
-    dtype = pto.float32
-    index_dtype = pto.int32
-    ptr_type = pto.PtrType(dtype)
-    tensor_type = pto.TensorType(rank=1, dtype=dtype)
-    tile_length = 8192  # >=16 KB DMA gets high BW util
-    subtensor_type = pto.SubTensorType(shape=[1, tile_length], dtype=dtype)
-    tile_cfg = pto.TileBufConfig()
-    tile_type = pto.TileBufType(
-        shape=[1, tile_length],
-        valid_shape=[1, tile_length],
-        dtype=dtype,
-        memory_space="VEC",
-        config=tile_cfg,
-    )
-    return {
-        "ptr_type": ptr_type,
-        "index_dtype": index_dtype,
-        "tensor_type": tensor_type,
-        "subtensor_type": subtensor_type,
-        "tile_type": tile_type,
-        "tile_length": tile_length,
-    }
+tile_cfg = pto.TileBufConfig()
+tile_type = pto.TileBufType(
+    shape=[1, tile_length],
+    valid_shape=[1, tile_length],
+    dtype=dtype,
+    memory_space="VEC",
+    config=tile_cfg,
+)
 
 
-@to_ir_module(meta_data=meta_data)
+@to_ir_module
 def vec_add_1d_dynamic(
     arg0: "ptr_type",
     arg1: "ptr_type",
@@ -56,9 +45,9 @@ def vec_add_1d_dynamic(
     tile_offset_this_core = vid * num_tiles_per_core
 
     with pto.vector_section():
-        tv0 = pto.as_tensor(tensor_type, ptr=arg0, shape=[total_elements], strides=[c1])
-        tv1 = pto.as_tensor(tensor_type, ptr=arg1, shape=[total_elements], strides=[c1])
-        tv2 = pto.as_tensor(tensor_type, ptr=arg2, shape=[total_elements], strides=[c1])
+        tv0 = pto.as_tensor(ptr=arg0, shape=[total_elements], strides=[c1])
+        tv1 = pto.as_tensor(ptr=arg1, shape=[total_elements], strides=[c1])
+        tv2 = pto.as_tensor(ptr=arg2, shape=[total_elements], strides=[c1])
 
         # Ping/pong tile buffers for software pipelining.
         tb0_ping = pto.alloc_tile(tile_type)
@@ -85,19 +74,16 @@ def vec_add_1d_dynamic(
                     offset_global = tile_offset_global * c_tile
 
                     sv0 = pto.slice_view(
-                        subtensor_type,
                         source=tv0,
                         offsets=[offset_global],
                         sizes=[c_tile],
                     )
                     sv1 = pto.slice_view(
-                        subtensor_type,
                         source=tv1,
                         offsets=[offset_global],
                         sizes=[c_tile],
                     )
                     sv2 = pto.slice_view(
-                        subtensor_type,
                         source=tv2,
                         offsets=[offset_global],
                         sizes=[c_tile],
