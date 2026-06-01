@@ -11,7 +11,7 @@ PTO-DSL provides a programming abstraction similar to [cuTile](https://docs.nvid
 - Easily interface with [torch-npu](https://gitcode.com/ascend/pytorch)
 - Lightweight, open-source compiler stack using [PTO Assembler](https://github.com/zhangstevenunity/PTOAS)
 
-**Important notice**: Since 2026/05, the pto-dsl framework is [integrated into the main PTOAS repo](https://github.com/hw-native-sys/PTOAS/tree/main/ptodsl) ([initial PR](https://github.com/hw-native-sys/PTOAS/pull/725)), with many enhancements: support Atlas A5 (Ascend 950); support fast compile Python DSL -> MLIR/LLVM -> bin (bypass original slow EmitC + Clang path); cleaned-up jit decorator syntax; keep MLIR dialect & compile pass & python frontend and tests in one repo for better consistency... *Future development is moved to there. This standalone repo will be only in maintenance mode.*
+**Important notice**: Since 2026/05, the pto-dsl framework is [integrated into the main PTOAS repo](https://github.com/hw-native-sys/PTOAS/tree/main/ptodsl) ([initial PR](https://github.com/hw-native-sys/PTOAS/pull/725)), with many enhancements: support Atlas A5 (Ascend 950); support fast compile Python DSL -> MLIR/LLVM -> bin (bypass original slow EmitC + Clang path); cleaned-up jit decorator syntax; keep MLIR dialect & compile pass & python frontend and tests in one repo for better consistency... *Future development is moved to there. This standalone repo will be only in maintenance mode.* Standalone Python examples will be moved to [pto-kernels/python](https://github.com/huawei-csl/pto-kernels/tree/main/python)
 
 ## Installation
 
